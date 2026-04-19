@@ -1,0 +1,21 @@
+# === VietMoney RAG — .gitignore ===
+
+# Environment
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Data (large / generated)
+data/chroma_db/
+data/processed/cache.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

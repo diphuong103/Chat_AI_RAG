@@ -1,0 +1,14 @@
+numpy==1.26.4
+langchain==0.1.16
+langchain-community==0.0.34
+langchain-groq==0.1.2
+sentence-transformers==2.7.0
+chromadb==0.4.24
+pypdf==4.2.0
+wikipedia==1.4.0
+trafilatura==1.9.0
+beautifulsoup4==4.12.3
+requests==2.31.0
+python-dotenv==1.0.1
+python-slugify==8.0.4
+cloudscraper==1.2.71
