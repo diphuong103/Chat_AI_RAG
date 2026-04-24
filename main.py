@@ -70,7 +70,7 @@ def run_chat() -> None:
     llm = ChatGroq(
         model_name="llama-3.1-8b-instant",
         temperature=0.2,
-        max_tokens=512,
+        max_tokens=1024,
         streaming=False,
     )
 
@@ -139,12 +139,22 @@ def main() -> None:
         run_chat()
     elif command == "ingest":
         run_ingest()
+    elif command == "serve":
+        import uvicorn
+        logger.info("Starting FastAPI server on http://0.0.0.0:8000")
+        uvicorn.run(
+            "api_server:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True,
+        )
     elif command in ("--help", "-h", "help"):
         print(
             "Usage: python main.py [command]\n\n"
             "Commands:\n"
             "  chat     Start interactive chatbot (default)\n"
             "  ingest   Run data ingestion pipeline\n"
+            "  serve    Start the FastAPI streaming API server\n"
             "  help     Show this help message\n"
         )
     else:

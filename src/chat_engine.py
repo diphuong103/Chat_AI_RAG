@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------ #
 #  System prompt — multilingual, financial focus                     #
 # ------------------------------------------------------------------ #
-SYSTEM_PROMPT = """You are VietMoney Assistant, a multilingual financial advisor chatbot.
+SYSTEM_PROMPT = """You are VietMoney Assistant — a friendly and enthusiastic Vietnam Travel and Financial Assistant.
 
 LANGUAGE RULE (highest priority — always follow this):
 - Detect the language of the user's question automatically
@@ -28,13 +28,35 @@ LANGUAGE RULE (highest priority — always follow this):
 - Question in any other language → Answer in that language
 - NEVER mix languages in a single response
 
+TONE RULE (very important):
+- Be warm, friendly, and enthusiastic — like a local friend giving travel advice
+- Use appropriate emoji (🏖️ 🌿 🎉 📍 ✨ 🍜) to make responses lively
+- Start responses with a warm greeting or excited opener, for example:
+  (VI) "Ôi, bạn hỏi đúng chỗ rồi! 🎉" or "Tuyệt vời! Để mình chia sẻ nhé! ✨"
+  (EN) "Great question! 🎉" or "Oh, you're going to love this! ✨"
+- End with an encouraging note, e.g. "Chúc bạn có chuyến đi thật vui! 🥰"
+- NEVER sound robotic or formal — be natural and conversational
+
+QUALITY RULE (critical — prevents garbled output):
+- Write each sentence COMPLETELY before starting the next one
+- NEVER repeat the same sentence or phrase twice
+- NEVER interleave words from two different sentences
+- Each bullet point must be a single, coherent, complete thought
+- If listing places, list each place ONCE with a brief description
+
 KNOWLEDGE RULE:
 - Use ONLY the provided context to answer
 - If the answer is not found in the context, respond honestly
   in the same language as the question:
   (EN) "I don't have enough information to answer this question."
-  (VI) "Tôi không có đủ thông tin để trả lời câu hỏi này."
-- Never fabricate financial information"""
+  (VI) "Mình chưa có đủ thông tin để trả lời câu hỏi này bạn ơi 😊"
+- Never fabricate financial information
+
+FORMATTING RULE:
+- Provide helpful, concise, and accurate information
+- Format itineraries in clear days (Day 1, Day 2...)
+- Include budget estimates and ATM locations if relevant
+- Use bullet points and short paragraphs for readability"""
 
 # Max characters per chunk (~400 tokens ≈ 1600 chars)
 MAX_CHUNK_CHARS = 1600
@@ -73,6 +95,8 @@ class ChatEngine:
         sys_prompt = (
             "You are a standalone query generator. Given the chat history and the user's latest message, "
             "synthesize a single standalone search query out of the latest message that includes all necessary context from the history. "
+            "IMPORTANT: Keep the rewritten query in the SAME LANGUAGE as the user's latest message. "
+            "Do NOT translate the query to another language. "
             "Your output MUST ONLY be the rewritten query text, nothing else. "
             "If the latest message is fully independent and needs no context, just output it as is."
         )
@@ -124,7 +148,7 @@ class ChatEngine:
 
         # --- Step 3: Vector retrieval (using standalone query) ---
         try:
-            relevant_docs = self.vector_store.similarity_search(standalone_query, k=3)
+            relevant_docs = self.vector_store.similarity_search(standalone_query, k=5)
         except Exception as e:
             logger.error(f"Retrieval failed: {e}")
             relevant_docs = []
@@ -150,7 +174,7 @@ class ChatEngine:
             messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {query}"))
             
             response = self.llm.invoke(messages)
-            answer = response.content.strip()
+            answer = self._clean_response(response.content.strip())
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
             # Return error but do NOT cache — so next attempt gets a fresh try
@@ -168,6 +192,100 @@ class ChatEngine:
         elapsed = (time.time() - start_time) * 1000
         logger.info(f"Answered in {elapsed:.0f}ms")
         return answer
+
+    # ------------------------------------------------------------------ #
+    #  Streaming ask method (for FastAPI SSE)                             #
+    # ------------------------------------------------------------------ #
+    async def stream_ask(self, query: str, history: list[dict]):
+        """Async generator: stream the RAG answer token-by-token.
+
+        Yields (event_type, content) tuples:
+            ("token", "partial text...")  — each LLM token
+            ("sources", [{...}, ...])    — document sources at end
+
+        Args:
+            query: User question.
+            history: List of {"role": "user"|"assistant", "content": "..."} dicts.
+        """
+        from langchain.schema import HumanMessage, SystemMessage, AIMessage
+
+        # Rebuild chat_history from provided history
+        paired_history = []
+        for i in range(0, len(history) - 1, 2):
+            if history[i].get("role") == "user" and history[i + 1].get("role") == "assistant":
+                paired_history.append((history[i]["content"], history[i + 1]["content"]))
+        self.chat_history = paired_history[-self.max_history:]
+
+        # Step 1: Rewrite query
+        standalone_query = self._rewrite_query(query)
+
+        # Step 2: Vector retrieval
+        try:
+            relevant_docs = self.vector_store.similarity_search(standalone_query, k=5)
+        except Exception as e:
+            logger.error(f"Retrieval failed: {e}")
+            relevant_docs = []
+
+        # Step 3: Context compression
+        context = self._compress_context(relevant_docs)
+        if not context.strip():
+            context = "(No relevant context found in the knowledge base.)"
+
+        # Step 4: Build messages
+        messages = [SystemMessage(content=SYSTEM_PROMPT)]
+        for h_q, h_a in self.chat_history:
+            messages.append(HumanMessage(content=h_q))
+            messages.append(AIMessage(content=h_a))
+        messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {query}"))
+
+        # Step 5: Stream LLM response & collect full text for cleaning
+        full_response = ""
+        try:
+            async for chunk in self.llm.astream(messages):
+                token = chunk.content
+                if token:
+                    full_response += token
+        except Exception as e:
+            logger.error(f"LLM stream failed: {e}")
+            full_response = "Xin lỗi, đã xảy ra lỗi. / Sorry, an error occurred."
+
+        # Clean the full response before yielding
+        cleaned = self._clean_response(full_response)
+        yield ("token", cleaned)
+
+        # Step 6: Yield sources
+        sources = self._extract_sources(relevant_docs)
+        if sources:
+            yield ("sources", sources)
+
+    # ------------------------------------------------------------------ #
+    #  Extract document sources for reference cards                      #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _extract_sources(docs: List[Document]) -> list[dict]:
+        """Extract unique source metadata from retrieved docs.
+
+        Returns:
+            List of dicts with keys: source, title, url.
+        """
+        seen = set()
+        sources = []
+        for doc in docs:
+            meta = doc.metadata
+            source_path = meta.get("source", "")
+            title = meta.get("title", "")
+            url = meta.get("url", "")
+
+            # Use URL or source path as dedup key
+            key = url or source_path
+            if key and key not in seen:
+                seen.add(key)
+                sources.append({
+                    "source": Path(source_path).name if source_path else "",
+                    "title": title or Path(source_path).stem if source_path else "Unknown",
+                    "url": url,
+                })
+        return sources
 
     # ------------------------------------------------------------------ #
     #  Cache methods                                                     #
@@ -197,6 +315,52 @@ class ChatEngine:
             except (json.JSONDecodeError, Exception) as e:
                 logger.warning(f"Cache file corrupted, starting fresh: {e}")
         return {}
+
+    # ------------------------------------------------------------------ #
+    #  Response cleaning (removes duplicate/garbled lines)                #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _clean_response(text: str) -> str:
+        """Remove duplicate or near-duplicate lines from LLM output.
+
+        Handles a known issue where the LLM sometimes interleaves or
+        repeats sentences in Vietnamese text generation.
+
+        Args:
+            text: Raw LLM response string.
+
+        Returns:
+            Cleaned text with duplicate lines removed.
+        """
+        if not text:
+            return text
+
+        lines = text.split("\n")
+        seen: set[str] = set()
+        cleaned_lines: list[str] = []
+
+        for line in lines:
+            # Normalize for comparison: strip whitespace and collapse spaces
+            normalized = re.sub(r"\s+", " ", line.strip()).lower()
+
+            # Skip empty lines (but keep one blank line for formatting)
+            if not normalized:
+                if cleaned_lines and cleaned_lines[-1] != "":
+                    cleaned_lines.append("")
+                continue
+
+            # Skip exact duplicate lines
+            if normalized in seen:
+                continue
+
+            seen.add(normalized)
+            cleaned_lines.append(line)
+
+        # Remove trailing empty lines
+        while cleaned_lines and cleaned_lines[-1] == "":
+            cleaned_lines.pop()
+
+        return "\n".join(cleaned_lines)
 
     # ------------------------------------------------------------------ #
     #  Context compression                                               #

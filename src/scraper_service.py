@@ -4,6 +4,8 @@ Scrapes content from Wikipedia and arbitrary URLs, saves as .txt files.
 """
 
 import logging
+import re
+import unicodedata
 from pathlib import Path
 
 import cloudscraper
@@ -60,10 +62,12 @@ class ScraperService:
                 slug = self._slugify(keyword)
                 file_path = self.wiki_dir / f"{slug}.json"
                 
+                content = self._clean_text(content)
                 data = {
                     "source_type": "wikipedia",
                     "title": page.title,
                     "url": page.url,
+                    "language": attempt_lang,
                     "content": content
                 }
 
@@ -82,10 +86,12 @@ class ScraperService:
                     slug = self._slugify(keyword)
                     file_path = self.wiki_dir / f"{slug}.json"
                     
+                    content = self._clean_text(content)
                     data = {
                         "source_type": "wikipedia",
                         "title": page.title,
                         "url": page.url,
+                        "language": attempt_lang,
                         "content": content
                     }
                     import json
@@ -141,7 +147,7 @@ class ScraperService:
         if html:
             extracted = trafilatura.extract(html, include_links=False, include_images=False, include_comments=False)
             if extracted and len(extracted.strip()) > 50:
-                content = extracted
+                content = self._clean_text(extracted)
                 logger.info(f"Trafilatura lọc thành công bài viết (bỏ qua rác).")
                 # Try to get title from BeautifulSoup since trafilatura strips the head
                 try:
@@ -157,7 +163,8 @@ class ScraperService:
                 soup = BeautifulSoup(html, "html.parser")
                 title = soup.title.string.strip() if soup.title else ""
                 paragraphs = soup.find_all("p")
-                content = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+                raw = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+                content = self._clean_text(raw)
             except Exception as e:
                 logger.error(f"BeautifulSoup fallback failed: {e}")
                 return ""
@@ -172,10 +179,15 @@ class ScraperService:
         if not title:
             title = url
 
+        # Detect language from content
+        from src.document_processor import DocumentProcessor
+        detected_lang = DocumentProcessor.detect_language(content)
+
         data = {
             "source_type": "web",
             "title": title,
             "url": url,
+            "language": detected_lang,
             "content": content
         }
 
@@ -187,6 +199,29 @@ class ScraperService:
         except Exception as e:
             logger.error(f"Failed to save web content: {e}")
             return ""
+
+    # ------------------------------------------------------------------ #
+    #  Text cleaning helper                                              #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _clean_text(text: str) -> str:
+        """Normalize Unicode and clean up whitespace.
+
+        Applies NFC normalization (critical for Vietnamese diacritics),
+        collapses excessive whitespace, and strips junk characters.
+
+        Args:
+            text: Raw text string.
+
+        Returns:
+            Cleaned text string.
+        """
+        if not text:
+            return text
+        text = unicodedata.normalize("NFC", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r" {2,}", " ", text)
+        return text.strip()
 
     # ------------------------------------------------------------------ #
     #  Slugify helper                                                    #

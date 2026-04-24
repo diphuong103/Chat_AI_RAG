@@ -5,6 +5,8 @@ Handles loading PDF/TXT files and splitting them into chunks with MD5-based chun
 
 import hashlib
 import logging
+import re
+import unicodedata
 from pathlib import Path
 from typing import List
 
@@ -23,7 +25,7 @@ class DocumentProcessor:
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             length_function=len,
-            separators=["\n\n", "\n", ". ", " ", ""],
+            separators=["\n\n", "\n", ".\n", ". ", "? ", "! ", "; ", ", ", " ", ""],
         )
 
     # ------------------------------------------------------------------ #
@@ -98,8 +100,11 @@ class DocumentProcessor:
         chunks = self.splitter.split_documents(docs)
 
         for chunk in chunks:
+            # Normalize Unicode (NFC) for consistent Vietnamese diacritics
+            chunk.page_content = self.clean_text(chunk.page_content)
             chunk_id = hashlib.md5(chunk.page_content.encode("utf-8")).hexdigest()
             chunk.metadata["chunk_id"] = chunk_id
+            chunk.metadata["language"] = self.detect_language(chunk.page_content)
 
         logger.info(f"Split into {len(chunks)} chunk(s)")
         return chunks
@@ -127,3 +132,75 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Failed to hash {file_path.name}: {e}")
             return ""
+
+    # ------------------------------------------------------------------ #
+    #  Text cleaning — Unicode normalization & junk removal              #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def clean_text(text: str) -> str:
+        """Normalize Unicode and clean up whitespace.
+
+        Applies NFC normalization (critical for Vietnamese diacritics),
+        collapses excessive whitespace, and strips junk characters.
+
+        Args:
+            text: Raw text string.
+
+        Returns:
+            Cleaned text string.
+        """
+        if not text:
+            return text
+        # NFC normalization — ensures consistent Vietnamese characters
+        text = unicodedata.normalize("NFC", text)
+        # Collapse excessive newlines (max 2)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        # Collapse multiple spaces
+        text = re.sub(r" {2,}", " ", text)
+        return text.strip()
+
+    # ------------------------------------------------------------------ #
+    #  Language detection — lightweight heuristic                        #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def detect_language(text: str) -> str:
+        """Detect language of text using character-range heuristics.
+
+        Checks for Vietnamese diacritical marks first, then CJK ranges,
+        then defaults to English.
+
+        Args:
+            text: Input text (first 500 chars are analyzed).
+
+        Returns:
+            Language code: 'vi', 'en', 'zh', 'ja', 'ko', or 'other'.
+        """
+        sample = text[:500]
+
+        # Vietnamese-specific diacritics (ắ, ằ, ẳ, ẵ, ặ, ơ, ư, đ, etc.)
+        vi_pattern = re.compile(r"[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]", re.IGNORECASE)
+        vi_count = len(vi_pattern.findall(sample))
+        if vi_count >= 5:
+            return "vi"
+
+        # CJK Unified Ideographs (Chinese)
+        zh_count = len(re.findall(r"[\u4e00-\u9fff]", sample))
+        if zh_count >= 5:
+            return "zh"
+
+        # Japanese Hiragana/Katakana
+        ja_count = len(re.findall(r"[\u3040-\u309f\u30a0-\u30ff]", sample))
+        if ja_count >= 3:
+            return "ja"
+
+        # Korean Hangul
+        ko_count = len(re.findall(r"[\uac00-\ud7af\u1100-\u11ff]", sample))
+        if ko_count >= 3:
+            return "ko"
+
+        # Default to English for Latin-script text
+        latin_count = len(re.findall(r"[a-zA-Z]", sample))
+        if latin_count > len(sample) * 0.3:
+            return "en"
+
+        return "other"

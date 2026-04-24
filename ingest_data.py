@@ -104,7 +104,7 @@ def run_pipeline() -> None:
         encode_kwargs={"normalize_embeddings": True},
     )
 
-    processor = DocumentProcessor(chunk_size=500, chunk_overlap=50)
+    processor = DocumentProcessor(chunk_size=800, chunk_overlap=100)
     vector_store = VectorStoreManager(persist_dir=CHROMA_DIR, embeddings=embeddings)
     registry = load_registry()
 

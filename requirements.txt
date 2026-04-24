@@ -12,3 +12,5 @@ requests==2.31.0
 python-dotenv==1.0.1
 python-slugify==8.0.4
 cloudscraper==1.2.71
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
