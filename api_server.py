@@ -23,6 +23,7 @@ from langchain_groq import ChatGroq
 
 from src.vector_store_manager import VectorStoreManager
 from src.chat_engine import ChatEngine
+from src.exchange_rate_service import ExchangeRateService
 
 # ------------------------------------------------------------------ #
 #  Configuration                                                     #
@@ -76,12 +77,17 @@ async def lifespan(app: FastAPI):
         streaming=True,  # Enable streaming support
     )
 
+    # Exchange rate service
+    logger.info("Initializing Exchange Rate Service...")
+    rate_service = ExchangeRateService()
+
     # Chat engine
     engine = ChatEngine(
         vector_store=vector_store,
         llm=llm,
         embeddings=embeddings,
         cache_path=CACHE_PATH,
+        exchange_rate_service=rate_service,
     )
 
     logger.info("✅ API Server ready!")

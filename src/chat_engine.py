@@ -1,6 +1,7 @@
 """
 VietMoney RAG — ChatEngine
 Multilingual Q&A engine: cache → vector retrieval → context compression → Groq LLM.
+Integrated with live exchange rate data for financial consulting.
 """
 
 import hashlib
@@ -8,6 +9,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -16,47 +18,44 @@ from langchain.schema import Document
 logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------ #
-#  System prompt — multilingual, financial focus                     #
+#  System prompt — VietMoney Financial Consulting Expert             #
 # ------------------------------------------------------------------ #
-SYSTEM_PROMPT = """You are VietMoney Assistant — a friendly and enthusiastic Vietnam Travel and Financial Assistant.
+SYSTEM_PROMPT_TEMPLATE = """### ROLE
+Bạn là Chuyên gia Tư vấn Tài chính cấp cao của VietMoney. Nhiệm vụ của bạn là giải đáp thắc mắc của khách hàng về dịch vụ cầm đồ, đổi tiền, và tỷ giá ngoại tệ một cách chính xác, minh bạch.
 
-LANGUAGE RULE (highest priority — always follow this):
-- Detect the language of the user's question automatically
-- ALWAYS respond in THE SAME LANGUAGE as the user's question
-- Question in English   → Answer in English
-- Question in Vietnamese → Answer in Vietnamese
-- Question in any other language → Answer in that language
-- NEVER mix languages in a single response
+### KNOWLEDGE CONTEXT
+1. **Dữ liệu RAG (Tĩnh):** Quy trình, hạn mức, thủ tục, vị trí chi nhánh.
+2. **Dữ liệu Live (Động):** Tỷ giá ngoại tệ thời gian thực (được cung cấp trong từng lượt hỏi).
 
-TONE RULE (very important):
-- Be warm, friendly, and enthusiastic — like a local friend giving travel advice
-- Use appropriate emoji (🏖️ 🌿 🎉 📍 ✨ 🍜) to make responses lively
-- Start responses with a warm greeting or excited opener, for example:
-  (VI) "Ôi, bạn hỏi đúng chỗ rồi! 🎉" or "Tuyệt vời! Để mình chia sẻ nhé! ✨"
-  (EN) "Great question! 🎉" or "Oh, you're going to love this! ✨"
-- End with an encouraging note, e.g. "Chúc bạn có chuyến đi thật vui! 🥰"
-- NEVER sound robotic or formal — be natural and conversational
+### NGUYÊN TẮC VÀNG (STRICT RULES)
+- **Sự thật là trên hết:** Nếu thông tin không có trong "Ngữ cảnh" hoặc "Tỷ giá", tuyệt đối không tự đoán. Hãy trả lời: "VietMoney hiện chưa có thông tin chính xác về mục này, xin vui lòng để lại số điện thoại để nhân viên tư vấn trực tiếp."
+- **Ưu tiên Tỷ giá Live:** Khi khách hỏi về giá tiền/đổi tiền, PHẢI ưu tiên dữ liệu từ phần [LIVE DATA].
+- **Định dạng số:** Luôn dùng dấu chấm phân cách hàng nghìn (Ví dụ: 25.400 VND).
+- **Tính toán:** Nếu khách yêu cầu tính toán (ví dụ: đổi 100 USD), hãy thực hiện phép tính dựa trên tỷ giá được cung cấp và làm tròn 2 chữ số thập phân.
+
+### PHONG CÁCH PHẢN HỒI
+- Ngôn ngữ chuyên nghiệp, lịch sự nhưng gần gũi.
+- Câu trả lời nên trình bày theo dạng: Tóm tắt ý chính -> Chi tiết (bullet points) -> Lời chào/Gợi ý hành động.
 
 QUALITY RULE (critical — prevents garbled output):
 - Write each sentence COMPLETELY before starting the next one
 - NEVER repeat the same sentence or phrase twice
 - NEVER interleave words from two different sentences
 - Each bullet point must be a single, coherent, complete thought
-- If listing places, list each place ONCE with a brief description
 
-KNOWLEDGE RULE:
-- Use ONLY the provided context to answer
-- If the answer is not found in the context, respond honestly
-  in the same language as the question:
-  (EN) "I don't have enough information to answer this question."
-  (VI) "Mình chưa có đủ thông tin để trả lời câu hỏi này bạn ơi 😊"
-- Never fabricate financial information
+### THÔNG TIN HỆ THỐNG
+- Thời gian hiện tại: {current_time}
+- [LIVE DATA]: {live_rate_info}
 
-FORMATTING RULE:
-- Provide helpful, concise, and accurate information
-- Format itineraries in clear days (Day 1, Day 2...)
-- Include budget estimates and ATM locations if relevant
-- Use bullet points and short paragraphs for readability"""
+### NGỮ CẢNH TRUY XUẤT (RAG):
+{clean_ctx}
+
+---
+### CÂU HỎI CỦA KHÁCH HÀNG:
+"{query}"
+
+### TRẢ LỜI:
+"""
 
 # Max characters per chunk (~400 tokens ≈ 1600 chars)
 MAX_CHUNK_CHARS = 1600
@@ -65,18 +64,21 @@ MAX_CHUNK_CHARS = 1600
 class ChatEngine:
     """Multilingual chat engine with caching, vector retrieval, and Groq LLM."""
 
-    def __init__(self, vector_store, llm, embeddings, cache_path: Path):
+    def __init__(self, vector_store, llm, embeddings, cache_path: Path,
+                 exchange_rate_service=None):
         """
         Args:
             vector_store: VectorStoreManager instance.
             llm: LangChain-compatible LLM (e.g. ChatGroq).
             embeddings: Embedding model (for reference, vector_store uses it internally).
             cache_path: Path to cache.json file.
+            exchange_rate_service: Optional ExchangeRateService for live rates.
         """
         self.vector_store = vector_store
         self.llm = llm
         self.embeddings = embeddings
         self.cache_path = Path(cache_path)
+        self.exchange_rate_service = exchange_rate_service
         self.cache: dict = self._load_cache()
         self.chat_history = []
         self.max_history = 5
@@ -157,22 +159,38 @@ class ChatEngine:
         context = self._compress_context(relevant_docs)
 
         if not context.strip():
-            context = "(No relevant context found in the knowledge base.)"
+            context = "(Không tìm thấy ngữ cảnh liên quan trong cơ sở kiến thức.)"
 
-        # --- Step 5: Call Groq LLM with Chat History ---
+        # --- Step 5: Build prompt with live data & call Groq LLM ---
         try:
             from langchain.schema import HumanMessage, SystemMessage, AIMessage
 
-            messages = [SystemMessage(content=SYSTEM_PROMPT)]
-            
+            # Get live exchange rate info
+            live_rate_info = ""
+            if self.exchange_rate_service:
+                live_rate_info = self.exchange_rate_service.format_rates_for_prompt()
+            if not live_rate_info:
+                live_rate_info = "(Không có dữ liệu tỷ giá tại thời điểm này)"
+
+            # Build the system prompt with all dynamic data
+            current_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            system_content = SYSTEM_PROMPT_TEMPLATE.format(
+                current_time=current_time,
+                live_rate_info=live_rate_info,
+                clean_ctx=context,
+                query=query,
+            )
+
+            messages = [SystemMessage(content=system_content)]
+
             # Inject history into the prompt
             for h_q, h_a in self.chat_history:
                 messages.append(HumanMessage(content=h_q))
                 messages.append(AIMessage(content=h_a))
-                
-            # Latest query with RAG context
-            messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {query}"))
-            
+
+            # Latest query
+            messages.append(HumanMessage(content=query))
+
             response = self.llm.invoke(messages)
             answer = self._clean_response(response.content.strip())
         except Exception as e:
@@ -229,14 +247,28 @@ class ChatEngine:
         # Step 3: Context compression
         context = self._compress_context(relevant_docs)
         if not context.strip():
-            context = "(No relevant context found in the knowledge base.)"
+            context = "(Không tìm thấy ngữ cảnh liên quan trong cơ sở kiến thức.)"
 
-        # Step 4: Build messages
-        messages = [SystemMessage(content=SYSTEM_PROMPT)]
+        # Step 4: Build messages with live rate data
+        live_rate_info = ""
+        if self.exchange_rate_service:
+            live_rate_info = self.exchange_rate_service.format_rates_for_prompt()
+        if not live_rate_info:
+            live_rate_info = "(Không có dữ liệu tỷ giá tại thời điểm này)"
+
+        current_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        system_content = SYSTEM_PROMPT_TEMPLATE.format(
+            current_time=current_time,
+            live_rate_info=live_rate_info,
+            clean_ctx=context,
+            query=query,
+        )
+
+        messages = [SystemMessage(content=system_content)]
         for h_q, h_a in self.chat_history:
             messages.append(HumanMessage(content=h_q))
             messages.append(AIMessage(content=h_a))
-        messages.append(HumanMessage(content=f"Context:\n{context}\n\nQuestion: {query}"))
+        messages.append(HumanMessage(content=query))
 
         # Step 5: Stream LLM response & collect full text for cleaning
         full_response = ""

@@ -12,6 +12,7 @@ from src.scraper_service import ScraperService
 # ========================================================
 URLS = [
     "https://vinpearl.com/vi/40-dia-diem-du-lich-viet-nam-noi-tieng-nhat-dinh-nen-den-mot-lan",
+
 ]
 
 def main():
