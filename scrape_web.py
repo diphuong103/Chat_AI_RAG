@@ -11,7 +11,64 @@ from src.scraper_service import ScraperService
 # Thêm các link URL khác vào đây, mỗi link nằm trong dấu ngoặc kép và cách nhau bằng dấu phẩy
 # ========================================================
 URLS = [
+    # ==========================================================
+    # 1. ĐỊA ĐIỂM & CẨM NANG DU LỊCH
+    # ==========================================================
     "https://vinpearl.com/vi/40-dia-diem-du-lich-viet-nam-noi-tieng-nhat-dinh-nen-den-mot-lan",
+    "https://vinpearl.com/vi/du-lich-mien-bac",
+    "https://vinpearl.com/vi/du-lich-mien-trung",
+    "https://vinpearl.com/vi/du-lich-mien-nam",
+
+    # ==========================================================
+    # 2. LỄ HỘI
+    # ==========================================================
+    "https://toplist.vn/top-list/le-hoi-truyen-thong-noi-tieng-nhat-viet-nam-1842.html",
+    "https://mytour.vn/vi/blog/bai-viet/top-14-le-hoi-truyen-thong-loi-cuon-nhat-viet-nam.html",
+    "https://vinpearl.com/vi/tong-hop-cac-le-hoi-o-viet-nam-noi-tieng-dac-sac-nhat-3-mien",
+    "https://vietsensetravel.com/22-le-hoi-noi-tieng-viet-nam-n.html",
+    "https://dulichfree.com/cac-le-hoi-o-viet-nam/",
+
+    # ==========================================================
+    # 3. VISA & THỰC TIỄN KHÁCH QUỐC TẾ
+    # ==========================================================
+    "https://vietnam.travel/plan-your-trip/visa-requirements",
+    "https://vietnam.travel/plan-your-trip",
+
+    # ==========================================================
+    # 4. DI CHUYỂN & SÂN BAY
+    # ==========================================================
+    "https://noibaiairport.vn",
+    "https://vinpearl.com/vi/san-bay-quoc-te-noi-bai",
+    "https://vinpearl.com/vi/san-bay-quoc-te-tan-son-nhat",
+    "https://vinpearl.com/vi/san-bay-quoc-te-da-nang",
+
+    # ==========================================================
+    # 5. GIÁ VÉ THAM QUAN
+    # ==========================================================
+    "https://dulichkhatvongviet.com/gia-ve-tham-quan-du-lich-viet-nam/",
+
+    # ==========================================================
+    # 6. THỜI TIẾT & MÙA DU LỊCH
+    # ==========================================================
+    "https://vinpearl.com/vi/thoi-tiet-viet-nam",
+    "https://vinpearl.com/vi/thoi-diem-du-lich-viet-nam",
+
+    # ==========================================================
+    # 7. LƯU TRÚ & KHÁCH SẠN
+    # ==========================================================
+    "https://vinpearl.com/vi/cac-loai-hinh-luu-tru-du-lich",
+
+    # ==========================================================
+    # 8. ẨM THỰC (bổ sung thực tế, quán ăn, giá cả)
+    # ==========================================================
+    "https://vinpearl.com/vi/am-thuc-viet-nam",
+    "https://vinpearl.com/vi/mon-an-viet-nam-noi-tieng",
+
+    # ==========================================================
+    # 9. VĂN HÓA & PHONG TỤC
+    # ==========================================================
+    "https://vinpearl.com/vi/van-hoa-viet-nam",
+    "https://vietnam.travel/things-to-do",
 ]
 
 def main():

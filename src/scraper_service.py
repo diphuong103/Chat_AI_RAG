@@ -112,6 +112,96 @@ class ScraperService:
         logger.error(f"Could not scrape Wikipedia for '{keyword}' in any language")
         return ""
 
+    def scrape_wikipedia_deep(self, keyword: str, lang: str = "vi", max_related: int = 10) -> list[str]:
+        """Deep scrape: main keyword + related internal links/searches.
+
+        Args:
+            keyword: The main search keyword (e.g., 'Di tích lịch sử Việt Nam').
+            lang: Language code.
+            max_related: Maximum number of related pages to scrape.
+
+        Returns:
+            List of absolute paths to all saved files.
+        """
+        saved_paths = []
+        
+        # 1. Scrape the main keyword first
+        logger.info(f"[DeepScrape] Bắt đầu cào chính: '{keyword}'")
+        main_path = self.scrape_wikipedia(keyword, lang)
+        if main_path:
+            saved_paths.append(main_path)
+            
+        # 2. Extract related keywords (Expansion + Internal Links + Search)
+        related_pages = self._get_wiki_related_pages(keyword, lang)
+        expanded_keywords = self._expand_keywords(keyword)
+        
+        # Combine and deduplicate
+        all_targets = list(dict.fromkeys(expanded_keywords + related_pages))
+        
+        # If the main keyword was already processed, remove it
+        if keyword in all_targets:
+            all_targets.remove(keyword)
+            
+        logger.info(f"[DeepScrape] Tìm thấy {len(all_targets)} bài viết liên quan. Đang cào tối đa {max_related} bài...")
+        
+        # 3. Scrape related pages
+        scraped_count = 0
+        for target in all_targets:
+            if scraped_count >= max_related:
+                break
+            # Skip empty or overly broad targets
+            if not target or len(target) < 3:
+                continue
+                
+            logger.info(f"[DeepScrape] Đang cào bài liên quan ({scraped_count+1}/{max_related}): '{target}'")
+            try:
+                path = self.scrape_wikipedia(target, lang)
+                if path:
+                    saved_paths.append(path)
+                    scraped_count += 1
+            except Exception as e:
+                logger.error(f"[DeepScrape] Lỗi khi cào bài '{target}': {e}")
+                
+        return saved_paths
+
+    def _expand_keywords(self, keyword: str) -> list[str]:
+        """Expand a geography/topic keyword with common tourism sub-topics."""
+        # Generic topics that apply broadly
+        sub_topics = [
+            "Lễ hội", "Ẩm thực", "Du lịch", "Đặc sản", "Lịch sử", 
+            "Điểm tham quan", "Văn hóa", "Di tích"
+        ]
+        
+        expanded = []
+        for topic in sub_topics:
+            expanded.append(f"{topic} {keyword}")
+        return expanded
+        
+    def _get_wiki_related_pages(self, keyword: str, lang: str = "vi") -> list[str]:
+        """Use Wikipedia Search API and MediaWiki link extraction to find related pages."""
+        related = []
+        try:
+            wikipedia.set_lang(lang)
+            
+            # 1. Use standard search API
+            search_results = wikipedia.search(keyword, results=10)
+            related.extend(search_results)
+            
+            # 2. Try to get links from the main page
+            try:
+                page = wikipedia.page(keyword, auto_suggest=True)
+                links = page.links
+                valid_links = [l for l in links if not l.startswith("Thể loại:") and not l.startswith("Bản mẫu:")]
+                related.extend(valid_links[:15]) # Take top 15 links
+            except Exception:
+                pass
+                
+        except Exception as e:
+            logger.warning(f"Failed to get related pages for '{keyword}': {e}")
+            
+        return list(dict.fromkeys(related)) # deduplicate
+
+
     # ------------------------------------------------------------------ #
     #  URL scraping (trafilatura primary, BeautifulSoup fallback)        #
     # ------------------------------------------------------------------ #
